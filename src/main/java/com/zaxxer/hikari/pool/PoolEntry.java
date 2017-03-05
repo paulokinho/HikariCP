@@ -15,6 +15,10 @@
  */
 package com.zaxxer.hikari.pool;
 
+import static com.zaxxer.hikari.util.ClockSource.currentTime;
+import static com.zaxxer.hikari.util.ClockSource.elapsedDisplayString;
+import static com.zaxxer.hikari.util.ClockSource.elapsedMillis;
+
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -25,7 +29,6 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.zaxxer.hikari.util.ClockSource;
 import com.zaxxer.hikari.util.ConcurrentBag.IConcurrentBagEntry;
 import com.zaxxer.hikari.util.FastList;
 
@@ -39,12 +42,14 @@ final class PoolEntry implements IConcurrentBagEntry
    private static final Logger LOGGER = LoggerFactory.getLogger(PoolEntry.class);
    private static final AtomicIntegerFieldUpdater<PoolEntry> stateUpdater;
 
-   static final Comparator<PoolEntry> LASTACCESS_COMPARABLE;
+   static final Comparator<PoolEntry> LASTACCESS_REVERSE_COMPARABLE;
 
    Connection connection;
    long lastAccessed;
    long lastBorrowed;
-   private volatile int state;
+
+   @SuppressWarnings("FieldCanBeLocal")
+   private volatile int state = 0;
    private volatile boolean evict;
 
    private volatile ScheduledFuture<?> endOfLife;
@@ -57,12 +62,7 @@ final class PoolEntry implements IConcurrentBagEntry
 
    static
    {
-      LASTACCESS_COMPARABLE = new Comparator<PoolEntry>() {
-         @Override
-         public int compare(final PoolEntry entryOne, final PoolEntry entryTwo) {
-            return Long.compare(entryOne.lastAccessed, entryTwo.lastAccessed);
-         }
-      };
+      LASTACCESS_REVERSE_COMPARABLE = (entryOne, entryTwo) -> Long.compare(entryTwo.lastAccessed, entryOne.lastAccessed);
 
       stateUpdater = AtomicIntegerFieldUpdater.newUpdater(PoolEntry.class, "state");
    }
@@ -73,7 +73,7 @@ final class PoolEntry implements IConcurrentBagEntry
       this.hikariPool = (HikariPool) pool;
       this.isReadOnly = isReadOnly;
       this.isAutoCommit = isAutoCommit;
-      this.lastAccessed = ClockSource.INSTANCE.currentTime();
+      this.lastAccessed = currentTime();
       this.openStatements = new FastList<>(Statement.class, 16);
    }
 
@@ -91,7 +91,9 @@ final class PoolEntry implements IConcurrentBagEntry
    }
 
    /**
-    * @param endOfLife
+    * Set the end of life {@link ScheduledFuture}.
+    *
+    * @param endOfLife this PoolEntry/Connection's end of life {@link ScheduledFuture}
     */
    void setFutureEol(final ScheduledFuture<?> endOfLife)
    {
@@ -131,16 +133,16 @@ final class PoolEntry implements IConcurrentBagEntry
    /** Returns millis since lastBorrowed */
    long getMillisSinceBorrowed()
    {
-      return ClockSource.INSTANCE.elapsedMillis(lastBorrowed);
+      return elapsedMillis(lastBorrowed);
    }
 
    /** {@inheritDoc} */
    @Override
    public String toString()
    {
-      final long now = ClockSource.INSTANCE.currentTime();
+      final long now = currentTime();
       return connection
-         + ", accessed " + ClockSource.INSTANCE.elapsedDisplayString(lastAccessed, now) + " ago, "
+         + ", accessed " + elapsedDisplayString(lastAccessed, now) + " ago, "
          + stateToString();
    }
 
